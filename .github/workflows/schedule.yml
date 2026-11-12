@@ -1,1 +1,47 @@
+name: Расписание РУПО 9б-26
 
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: schedule-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Зависимости
+        run: pip install --quiet --disable-pip-version-check pymupdf
+
+      - name: Проверить расписание
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python schedule_bot.py --once
+
+      - name: Сохранить состояние
+        if: always()
+        run: |
+          git config user.name "schedule-bot"
+          git config user.email "schedule-bot@users.noreply.github.com"
+          git add state.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Состояние не изменилось"
+          else
+            git commit -m "state: $(date -u +%FT%TZ)"
+            git push
+          fi
