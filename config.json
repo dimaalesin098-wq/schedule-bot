@@ -1,0 +1,11 @@
+{
+  "token": "",
+  "chat_id": 1869030255,
+  "group": "РУПО 9б-26",
+  "interval_minutes": 10,
+  "page_url": "https://www.fa.ru/krasnoyarsk/for-students/schedule/full-time/",
+  "weekly": {
+    "title_contains": "",
+    "column": 3
+  }
+}
