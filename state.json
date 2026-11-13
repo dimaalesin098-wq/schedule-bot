@@ -58,19 +58,15 @@
     },
     "https://www.fa.ru/upload/constructor/25c/1pgi7wil9pzl0d42f2zi2ec8xiie85i1/13.11.2026.pdf": {
       "title": "13.11.2026",
-      "kind": "changes",
       "date": "13.11.2026",
       "etag": "\"6af55693-1f838\"",
-      "last_modified": "Thu, 12 Nov 2026 06:02:59 GMT",
-      "content_length": "129080"
+      "last_modified": "Thu, 12 Nov 2026 06:02:59 GMT"
     },
     "https://www.fa.ru/upload/constructor/c16/17f6bktl4rjjis1azs7xcee4peltxutf/14.11.2026.pdf": {
       "title": "14.11.2026",
-      "kind": "changes",
       "date": "14.11.2026",
       "etag": "\"6af667f5-15cef\"",
-      "last_modified": "Fri, 13 Nov 2026 01:29:25 GMT",
-      "content_length": "89327"
+      "last_modified": "Fri, 13 Nov 2026 01:29:25 GMT"
     },
     "https://www.fa.ru/upload/constructor/5f4/eg2ubfaoouywyu72mclzxafnigutjiir/16.11.2026.pdf": {
       "title": "16.11.2026",
@@ -82,17 +78,15 @@
     },
     "https://www.fa.ru/upload/constructor/fa8/mwlh7rfz4xfa16j9dkbxy1jm0s41ff39/16.11.2026.pdf": {
       "title": "16.11.2026",
-      "kind": "changes",
       "date": "16.11.2026",
       "etag": "\"6af6ba73-1f9b7\"",
-      "last_modified": "Fri, 13 Nov 2026 07:21:23 GMT",
-      "content_length": "129463"
+      "last_modified": "Fri, 13 Nov 2026 07:21:23 GMT"
     }
   },
   "first_run": false,
-  "updates_offset": 0,
+  "updates_offset": 336119844,
   "sent": {
-    "https://www.fa.ru/upload/constructor/25c/1pgi7wil9pzl0d42f2zi2ec8xiie85i1/13.11.2026.pdf": "2026-11-12 20:46:02",
-    "https://www.fa.ru/upload/constructor/c16/17f6bktl4rjjis1azs7xcee4peltxutf/14.11.2026.pdf": "2026-11-13 02:18:49"
+    "https://www.fa.ru/upload/constructor/25c/1pgi7wil9pzl0d42f2zi2ec8xiie85i1/13.11.2026.pdf|1869030255": "2026-11-12 20:46:02",
+    "https://www.fa.ru/upload/constructor/c16/17f6bktl4rjjis1azs7xcee4peltxutf/14.11.2026.pdf|1869030255": "2026-11-13 02:18:49"
   }
 }
