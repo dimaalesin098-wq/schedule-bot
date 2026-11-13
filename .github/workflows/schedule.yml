@@ -33,14 +33,14 @@ jobs:
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python schedule_bot.py --once
 
-      - name: Сохранить состояние
+      - name: Сохранить состояние и подписки
         if: always()
         run: |
           git config user.name "schedule-bot"
           git config user.email "schedule-bot@users.noreply.github.com"
-          git add state.json 2>/dev/null || true
+          git add state.json subscriptions.json 2>/dev/null || true
           if git diff --cached --quiet; then
-            echo "Состояние не изменилось"
+            echo "Изменений нет"
           else
             git commit -m "state: $(date -u +%FT%TZ)"
             git push
