@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Бот расписания: следит за страницей расписания колледжа и присылает
-в Telegram только расписание своей группы.
+Бот расписания колледжа (GitHub Actions, несколько пользователей).
 
-Сейчас умеет:
-  • ежедневные изменения (PDF с текстовым слоем) — разбирает по координатам
-    и присылает текстом;
-  • команды /start, /help, /now.
+• Следит за страницей расписания, ищет новые/изменённые PDF изменений.
+• Для каждого подписчика разбирает колонку ЕГО группы и присылает текстом.
+• Команды: /start, /help, /groups, /group НАЗВАНИЕ, /mygroup, /stop.
+• Подписки хранятся в subscriptions.json (файл коммитится workflow'ом).
 
-Запуск:  python schedule_bot.py
+Запуск локально:  python schedule_bot.py --once
 """
 
 import json
@@ -18,7 +17,6 @@ import re
 import sys
 import time
 import hashlib
-import shutil
 import socket
 import ssl
 import http.client
@@ -27,25 +25,15 @@ import urllib.request
 import urllib.error
 import traceback
 
-try:
-    import numpy as np
-except Exception:  # в GitHub Actions numpy не нужен (только текст)
-    np = None
-
 import pymupdf
-
-try:
-    from PIL import Image
-    HAS_IMAGE = np is not None
-except Exception:  # в GitHub Actions Pillow не нужен (только текст)
-    HAS_IMAGE = False
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, "config.json")
 STATE_PATH = os.path.join(BASE, "state.json")
+SUBS_PATH = os.path.join(BASE, "subscriptions.json")
 LOG_PATH = os.path.join(BASE, "bot.log")
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) schedule-bot/1.0"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) schedule-bot/2.0"
 SITE = "https://www.fa.ru"
 
 TIME_RE = re.compile(r"^\d{1,2}[.:]\d{2}-\d{1,2}[.:]\d{2}$")
@@ -55,37 +43,32 @@ LINK_RE = re.compile(
     re.S,
 )
 TEACHER_RE = re.compile(
-    r"^(.*?)\s+([А-ЯЁ][а-яё\-]+)\s+([А-ЯЁ]\.\s*[А-ЯЁ]\.)\s*\(([^()]*)\)\s*$",
-    re.S,
+    r"([А-ЯЁ][а-яё-]+)\s+([А-ЯЁ]\.\s*[А-ЯЁ]\.)\s*\(([^()]*)\)",
 )
 
 
-# --------------------------------------------------------------------------- утилиты
+# --------------------------------------------------------------------------- файлы
+def load_json(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def save_json(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
 def load_config():
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    # В GitHub Actions токен и чат берутся из секретов, а не из файла
+    cfg = load_json(CONFIG_PATH, {})
     cfg["token"] = os.environ.get("BOT_TOKEN") or cfg.get("token", "")
     if os.environ.get("CHAT_ID"):
         cfg["chat_id"] = int(os.environ["CHAT_ID"])
     return cfg
-
-
-def load_state():
-    if os.path.exists(STATE_PATH):
-        try:
-            with open(STATE_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {"files": {}, "first_run": True, "updates_offset": 0, "sent": {}}
-
-
-def save_state(state):
-    tmp = STATE_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, STATE_PATH)
 
 
 def log(msg):
@@ -98,6 +81,41 @@ def log(msg):
         pass
 
 
+def load_state():
+    state = load_json(STATE_PATH, {})
+    state.setdefault("files", {})
+    state.setdefault("sent", {})
+    state.setdefault("updates_offset", 0)
+    state.setdefault("first_run", True)
+    return state
+
+
+def load_subs(cfg):
+    data = load_json(SUBS_PATH, None)
+    if data is None:
+        # миграция: раньше был один чат и одна группа в config.json
+        subs = []
+        if cfg.get("chat_id") and cfg.get("group"):
+            subs = [{
+                "chat_id": int(cfg["chat_id"]),
+                "group": cfg["group"],
+                "active": True,
+                "added": time.strftime("%Y-%m-%d"),
+            }]
+        return {"subs": subs}
+    data.setdefault("subs", [])
+    return data
+
+
+def save_subs(subs):
+    save_json(SUBS_PATH, subs)
+
+
+def norm(s):
+    return re.sub(r"[\s\u00a0]+", "", str(s or "")).lower()
+
+
+# --------------------------------------------------------------------------- http
 def http_get(url, timeout=90):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -115,24 +133,21 @@ def http_head(url, timeout=30):
 
 
 def clean(text):
-    return re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
 # --------------------------------------------------------------------------- Telegram
 API_HOST = "api.telegram.org"
-# Резервные IP Telegram: DNS часто отдаёт заблокированный адрес,
-# поэтому при ошибке пробуем подключиться к рабочим IP напрямую (SNI остаётся api.telegram.org).
 API_IPS = [
     "149.154.167.220",
     "149.154.167.197",
     "149.154.175.50",
     "91.108.56.130",
 ]
-_API_IP = None  # запоминаем рабочий IP, чтобы не тратить время на мёртвый DNS
+_API_IP = None
 
 
 def _https_json(path, body=None, headers=None, timeout=40):
-    """POST/GET к api.telegram.org: сначала по DNS, при ошибке — по резервным IP."""
     global _API_IP
     method = "POST" if body is not None else "GET"
 
@@ -170,24 +185,21 @@ def _https_json(path, body=None, headers=None, timeout=40):
 
 
 def tg(token, method, payload):
-    path = "/bot%s/%s" % (token, method)
-    data = json.dumps(payload).encode("utf-8")
     try:
-        return _https_json(path, body=data, headers={"Content-Type": "application/json"})
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "replace")
-        log("TG error %s: %s %s" % (method, e.code, body[:300]))
-        return {"ok": False}
+        return _https_json(
+            "/bot%s/%s" % (token, method),
+            body=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
     except Exception as e:
         log("TG error %s: %s" % (method, e))
         return {"ok": False}
 
 
-def send_text(cfg, text, attempts=4):
-    """Отправка текста с повторами: связь с Telegram бывает нестабильной."""
+def send_text(cfg, chat_id, text, attempts=3):
     for i in range(attempts):
         res = tg(cfg["token"], "sendMessage", {
-            "chat_id": cfg["chat_id"],
+            "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
@@ -195,66 +207,8 @@ def send_text(cfg, text, attempts=4):
         if res.get("ok"):
             return True
         if i + 1 < attempts:
-            delay = min(90, 5 * (2 ** i))
-            log("sendMessage: повтор через %d с" % delay)
-            time.sleep(delay)
+            time.sleep(min(60, 4 * (2 ** i)))
     return False
-
-
-def send_document(cfg, path, caption="", attempts=3):
-    """Отправка файла (multipart/form-data) без внешних зависимостей, с повторами."""
-    for i in range(attempts):
-        ok = _send_document_once(cfg, path, caption)
-        if ok:
-            return True
-        if i + 1 < attempts:
-            delay = min(90, 10 * (2 ** i))
-            log("sendDocument: повтор через %d с" % delay)
-            time.sleep(delay)
-    return False
-
-
-def _send_document_once(cfg, path, caption=""):
-    token, chat_id = cfg["token"], cfg["chat_id"]
-    boundary = "----bot" + hashlib.md5(str(time.time()).encode()).hexdigest()
-    with open(path, "rb") as f:
-        file_data = f.read()
-    filename = os.path.basename(path)
-    lower = filename.lower()
-    mime = ("image/png" if lower.endswith(".png")
-            else "image/jpeg" if lower.endswith((".jpg", ".jpeg"))
-            else "application/pdf")
-
-    parts = []
-
-    def field(name, value):
-        parts.append(
-            ("--%s\r\nContent-Disposition: form-data; name=\"%s\"\r\n\r\n%s\r\n"
-             % (boundary, name, value)).encode("utf-8")
-        )
-
-    field("chat_id", str(chat_id))
-    if caption:
-        field("caption", caption)
-    parts.append(
-        ("--%s\r\nContent-Disposition: form-data; name=\"document\"; filename=\"%s\"\r\n"
-         "Content-Type: %s\r\n\r\n" % (boundary, filename, mime)).encode("utf-8")
-    )
-    parts.append(file_data)
-    parts.append(("\r\n--%s--\r\n" % boundary).encode("utf-8"))
-    body = b"".join(parts)
-
-    try:
-        res = _https_json(
-            "/bot%s/sendDocument" % token,
-            body=body,
-            headers={"Content-Type": "multipart/form-data; boundary=%s" % boundary},
-            timeout=90,
-        )
-        return bool(res.get("ok"))
-    except Exception as e:
-        log("sendDocument error: %s" % e)
-        return False
 
 
 # --------------------------------------------------------------------------- страница
@@ -265,8 +219,7 @@ def fetch_links(cfg):
         title = clean(re.sub(r"<[^>]+>", "", title))
         if not href.lower().endswith(".pdf"):
             continue
-        url = href if href.startswith("http") else SITE + href
-        links.append((url, title))
+        links.append((href if href.startswith("http") else SITE + href, title))
     return links
 
 
@@ -279,53 +232,74 @@ def classify(title):
     return None, None
 
 
-# --------------------------------------------------------------------------- разбор PDF изменений
-def parse_changes(pdf_bytes, group):
-    """Возвращает список пар: [(номер, время, текст ячейки), ...] для нужной группы."""
-    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-    page = doc[0]
+# --------------------------------------------------------------------------- разбор PDF
+def _page_items(page):
     words = [w for w in page.get_text("words") if w[4].strip()]
-    if not words:
-        return []
-
     words.sort(key=lambda w: (w[1], w[0]))
-    times = [w for w in words if TIME_RE.match(w[4])]
-    if not times:
-        return []
-    times.sort(key=lambda w: w[1])
-    header_bottom = times[0][1] - 2.5
+    return words
 
-    head = [w for w in words if w[1] < header_bottom]
+
+def _times(words):
+    return sorted([w for w in words if TIME_RE.match(w[4])], key=lambda w: w[1])
+
+
+def _header(words, header_bottom):
     merged = []
-    for w in sorted(head, key=lambda w: w[0]):
+    for w in sorted([x for x in words if x[1] < header_bottom], key=lambda w: w[0]):
         if merged and w[0] - merged[-1]["x1"] < 1.3:
             merged[-1]["text"] += " " + w[4]
             merged[-1]["x1"] = w[2]
         else:
             merged.append({"text": w[4], "x0": w[0], "x1": w[2]})
+    return merged
 
-    def norm(s):
-        return re.sub(r"[\s\u00a0]+", "", s).lower()
 
+GROUP_RE = re.compile(r"^(РУПО|ЭБУ|СД|ОДЛ|Ф|БД|ЮР|ИСП)\s*\d+[а-яё]?-\d{2}$", re.I)
+
+
+def list_groups(pdf_bytes):
+    """Все названия групп из шапки PDF изменений (с фильтром мусора)."""
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    page = doc[0]
+    words = _page_items(page)
+    times = _times(words)
+    if not times:
+        return []
+    names = []
+    for m in _header(words, times[0][1] - 2.5):
+        name = clean(m["text"])
+        if GROUP_RE.match(name) and name not in names:
+            names.append(name)
+    return names
+
+
+def parse_changes(pdf_bytes, group):
+    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    page = doc[0]
+    words = _page_items(page)
+    times = _times(words)
+    if not times:
+        return []
+
+    header = _header(words, times[0][1] - 2.5)
     target = norm(group)
-    idx = next((i for i, m in enumerate(merged) if norm(m["text"]) == target), None)
+    idx = next((i for i, m in enumerate(header) if norm(m["text"]) == target), None)
     if idx is None:
-        idx = next((i for i, m in enumerate(merged) if norm(m["text"]).startswith(target)), None)
+        idx = next((i for i, m in enumerate(header) if norm(m["text"]).startswith(target)), None)
     if idx is None:
         return []
 
-    cur = merged[idx]
-    left = (merged[idx - 1]["x1"] + cur["x0"]) / 2 if idx > 0 else cur["x0"] - 2
-    right = (cur["x1"] + merged[idx + 1]["x0"]) / 2 if idx + 1 < len(merged) else cur["x1"] + 4
+    cur = header[idx]
+    left = (header[idx - 1]["x1"] + cur["x0"]) / 2 if idx > 0 else cur["x0"] - 2
+    right = (cur["x1"] + header[idx + 1]["x0"]) / 2 if idx + 1 < len(header) else cur["x1"] + 4
 
-    rows = []
-    # легенда внизу листа («замена преподавателя», «лекционное занятие») — не часть таблицы
     legend_y = None
     for w in words:
         if w[4] in ("замена", "лекционное", "кабинета") and w[0] < 130:
             legend_y = w[1] if legend_y is None else min(legend_y, w[1])
     table_bottom = (legend_y - 1) if legend_y else page.rect.height
 
+    rows = []
     for n, t in enumerate(times):
         y0 = t[1] - 2.4
         y1 = times[n + 1][1] - 2.4 if n + 1 < len(times) else table_bottom
@@ -338,257 +312,246 @@ def parse_changes(pdf_bytes, group):
 
 
 def split_cell(text):
-    m = TEACHER_RE.match(text)
-    if m:
-        subject = clean(m.group(1))
-        teacher = "%s %s" % (m.group(2), clean(m.group(3)))
-        room = clean(m.group(4))
-        return subject, teacher, room
-    return text, "", ""
-
-
-def _cluster(idx, gap=4):
-    groups = []
-    for v in idx:
-        if groups and v - groups[-1][-1] <= gap:
-            groups[-1].append(v)
-        else:
-            groups.append([v])
-    return [int(np.mean(g)) for g in groups]
-
-
-def build_weekly_column(pdf_bytes, column_index, out_path, label_cols=3, dpi=200):
-    """Вырезает из скана колонку нужной группы + колонку с днями/парами."""
-    if not HAS_IMAGE:
-        raise RuntimeError("для недельного расписания нужны numpy и Pillow")
-    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-    page = doc[0]
-    pix = page.get_pixmap(dpi=dpi)
-    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-    gray = np.asarray(img.convert("L"))
-    h, w = gray.shape
-    dark = gray < 215
-
-    vlines = _cluster(np.where(dark.sum(axis=0) > 0.5 * h)[0])
-    hlines = _cluster(np.where(dark.sum(axis=1) > 0.35 * w)[0])
-    if len(vlines) < label_cols + column_index:
-        raise RuntimeError("не нашёл сетку таблицы (вертикальных линий: %d)" % len(vlines))
-
-    top, bottom = (hlines[0], hlines[-1]) if hlines else (0, h)
-    lx0, lx1 = vlines[0], vlines[label_cols - 1]
-    gx0 = vlines[label_cols - 1 + column_index - 1]
-    gx1 = vlines[label_cols - 1 + column_index]
-
-    left = img.crop((lx0, top, lx1, bottom))
-    group = img.crop((gx0, top, gx1, bottom))
-
-    gap = 6
-    canvas = Image.new("RGB", (left.width + gap + group.width, left.height), "white")
-    canvas.paste(left, (0, 0))
-    canvas.paste(group, (left.width + gap, 0))
-    canvas = canvas.resize((int(canvas.width * 1.6), int(canvas.height * 1.6)), Image.LANCZOS)
-    canvas.save(out_path, "JPEG", quality=88)
-    return out_path
+    found = list(TEACHER_RE.finditer(text))
+    if found:
+        subject = clean(text[:found[0].start()])
+        tail = " / ".join(
+            "%s %s%s" % (m.group(1), clean(m.group(2)), (", каб. " + clean(m.group(3))) if m.group(3) else "")
+            for m in found
+        )
+        return subject, tail
+    return text, ""
 
 
 def fmt_time(t):
     m = re.match(r"^(\d{1,2})[.:](\d{2})-(\d{1,2})[.:](\d{2})$", t)
-    if not m:
-        return t
-    return "%s:%s–%s:%s" % (m.group(1), m.group(2), m.group(3), m.group(4))
+    return "%s:%s–%s:%s" % m.groups() if m else t
 
 
 def build_changes_message(group, date, rows):
     lines = ["🗓 <b>Изменения на %s</b>" % date, "Группа: <b>%s</b>" % group, ""]
     for num, tm, text in rows:
-        subject, teacher, room = split_cell(text)
-        tail = ""
-        if teacher:
-            tail = " — %s" % teacher
-        if room:
-            tail += ", каб. %s" % room
+        subject, tail = split_cell(text)
+        suffix = (" — %s" % tail) if tail else ""
         lines.append("<b>%d пара</b> · %s" % (num, fmt_time(tm)))
-        lines.append("%s%s" % (subject, tail))
+        lines.append("%s%s" % (subject, suffix))
         lines.append("")
     lines.append("<i>по данным fa.ru</i>")
     return "\n".join(lines)
 
 
-# --------------------------------------------------------------------------- основная логика
-def process_changes(cfg, url, title, date, state):
-    log("обрабатываю изменения: %s (%s)" % (title, date))
-    try:
-        data = http_get(url)
-    except Exception as e:
-        log("не скачал %s: %s" % (url, e))
-        return False
-    rows = parse_changes(data, cfg["group"])
-    if not rows:
-        log("группа %s не найдена в %s" % (cfg["group"], title))
-        return False
-    msg = build_changes_message(cfg["group"], date, rows)
-    ok = send_text(cfg, msg)
-    log("отправлено: %s" % ok)
-    if ok:
-        state.setdefault("sent", {})[url] = time.strftime("%Y-%m-%d %H:%M:%S")
-    return ok
-
-
-def process_weekly(cfg, url, title, state):
-    wcfg = cfg.get("weekly") or {}
-    column = int(wcfg.get("column", 3))
-    log("обрабатываю недельное расписание: %s (колонка %d)" % (title, column))
-    try:
-        data = http_get(url)
-    except Exception as e:
-        log("не скачал %s: %s" % (url, e))
-        return False
-    tmp = os.path.join(BASE, "tmp")
-    os.makedirs(tmp, exist_ok=True)
-    out = os.path.join(tmp, "week.jpg")
-    try:
-        build_weekly_column(data, column, out)
-    except Exception as e:
-        log("не смог вырезать колонку: %s" % e)
-        return False
-    caption = "📅 %s\nГруппа: %s" % (title, cfg["group"])
-    ok = send_document(cfg, out, caption)
-    log("недельное отправлено: %s" % ok)
-    if ok:
-        state.setdefault("sent", {})[url] = time.strftime("%Y-%m-%d %H:%M:%S")
-    return ok
-
-
-def check_once(cfg, state):
-    links = fetch_links(cfg)
-    log("ссылок на странице: %d" % len(links))
-
-    weekly_cfg = cfg.get("weekly") or {}
-    weekly_needle = (weekly_cfg.get("title_contains") or "").lower()
-    first_run = bool(state.get("first_run"))
-
-    pending_changes = []
-    pending_weekly = []
-    for url, title in links:
-        kind, date = classify(title)
-        if kind is None:
-            continue
-
-        head = http_head(url)
-        etag = head.get("etag", "")
-        lastmod = head.get("last-modified", "")
-        length = head.get("content-length", "")
-
-        prev = state["files"].get(url)
-        changed = prev is None or prev.get("etag") != etag or prev.get("last_modified") != lastmod
-
-        state["files"][url] = {
-            "title": title,
-            "kind": kind,
-            "date": date,
-            "etag": etag,
-            "last_modified": lastmod,
-            "content_length": length,
-        }
-        if not changed:
-            continue
-
-        if kind == "changes":
-            pending_changes.append((url, title, date))
-        elif weekly_needle and weekly_needle in title.lower():
-            pending_weekly.append((url, title))
-
-    if first_run:
-        # на первом запуске не спамим старыми файлами
-        pending_changes.sort(key=lambda x: time.strptime(x[2], "%d.%m.%Y"), reverse=True)
-        pending_changes = pending_changes[:1]
-        pending_weekly = [x for x in pending_weekly if "1 неделя" in x[1].lower()][:1]
-        state["first_run"] = False
-
-    for url, title, date in pending_changes:
-        try:
-            process_changes(cfg, url, title, date, state)
-        except Exception:
-            log("ОШИБКА обработки %s:\n%s" % (title, traceback.format_exc()))
-
-    for url, title in pending_weekly:
-        try:
-            process_weekly(cfg, url, title, state)
-        except Exception:
-            log("ОШИБКА недельного %s:\n%s" % (title, traceback.format_exc()))
-
-    save_state(state)
-
-
+# --------------------------------------------------------------------------- логика
 HELP_TEXT = (
-    "Привет! Я слежу за расписанием колледжа и присылаю только твою группу.\n\n"
-    "Группа: <b>%s</b>\n"
-    "Проверяю сайт каждые %d мин.\n\n"
+    "👋 Бот присылает изменения в расписании колледжа по <b>твоей</b> группе.\n\n"
     "Команды:\n"
-    "/now — изменения за последний день\n"
-    "/week — недельное расписание (вырезка по группе)\n"
-    "/help — эта справка"
+    "/groups — список групп\n"
+    "/group РУПО 9б-26 — подписаться на группу\n"
+    "/mygroup — какая группа выбрана\n"
+    "/stop — отписаться\n"
+    "/help — эта справка\n\n"
+    "Работает и в личке, и в групповом чате. Проверка каждые ~10 минут."
 )
 
 
-def handle_commands(cfg, state):
-    offset = state.get("updates_offset", 0)
+def apply_command(cfg, subs, chat_id, text, groups):
+    t = (text or "").strip()
+    low = t.lower()
+    entry = next((s for s in subs["subs"] if int(s["chat_id"]) == int(chat_id)), None)
+
+    if low in ("/start", "/help", "start", "help", "/помощь"):
+        send_text(cfg, chat_id, HELP_TEXT)
+        return True
+
+    if low == "/mygroup":
+        if entry and entry.get("active"):
+            send_text(cfg, chat_id, "Твоя группа: <b>%s</b>" % entry["group"])
+        else:
+            send_text(cfg, chat_id, "Ты пока не подписан. Напиши /groups и выбери группу.")
+        return True
+
+    if low == "/stop":
+        if entry:
+            entry["active"] = False
+            send_text(cfg, chat_id, "Отписал. Вернуться: /group НАЗВАНИЕ")
+        else:
+            send_text(cfg, chat_id, "Ты и так не подписан.")
+        return True
+
+    if low.startswith("/groups"):
+        if not groups:
+            send_text(cfg, chat_id, "Не смог получить список групп — попробуй позже.")
+            return True
+        chunk = []
+        size = 0
+        for g in groups:
+            if size + len(g) + 2 > 3500:
+                send_text(cfg, chat_id, "\n".join(chunk))
+                chunk, size = [], 0
+            chunk.append(g)
+            size += len(g) + 2
+        if chunk:
+            send_text(cfg, chat_id, "<b>Группы:</b>\n" + "\n".join(chunk))
+        return True
+
+    if low.startswith("/group"):
+        asked = clean(t[len("/group"):])
+        if not asked:
+            send_text(cfg, chat_id, "Напиши так: <code>/group РУПО 9б-26</code>")
+            return True
+        if not groups:
+            send_text(cfg, chat_id, "Список групп сейчас недоступен — попробуй позже.")
+            return True
+        exact = next((g for g in groups if norm(g) == norm(asked)), None)
+        if exact is None:
+            import difflib
+            close = difflib.get_close_matches(asked, groups, n=3, cutoff=0.5)
+            hint = ("\n\nПохожие: " + ", ".join(close)) if close else ""
+            send_text(cfg, chat_id, "Группа «%s» не найдена.%s" % (asked, hint))
+            return True
+        if entry:
+            entry["group"] = exact
+            entry["active"] = True
+        else:
+            subs["subs"].append({
+                "chat_id": int(chat_id),
+                "group": exact,
+                "active": True,
+                "added": time.strftime("%Y-%m-%d"),
+            })
+        send_text(cfg, chat_id, "Готово! Буду присылать изменения для <b>%s</b>." % exact)
+        return True
+
+    return False
+
+
+def get_groups(cfg, links):
+    """Список групп из самого свежего файла изменений."""
+    changes = [(u, t, d) for (u, t) in links for (kind, d) in [classify(t)] if kind == "changes"]
+    if not changes:
+        return []
+    changes.sort(key=lambda x: time.strptime(x[2], "%d.%m.%Y"), reverse=True)
+    url = changes[0][0]
     try:
-        res = tg(cfg["token"], "getUpdates", {"offset": offset, "timeout": 0, "limit": 20})
-    except Exception:
-        return
+        return list_groups(http_get(url))
+    except Exception as e:
+        log("не смог получить список групп: %s" % e)
+        return []
+
+
+def handle_commands(cfg, state, subs):
+    offset = state.get("updates_offset", 0)
+    res = tg(cfg["token"], "getUpdates", {"offset": offset, "timeout": 0, "limit": 50})
     if not res.get("ok"):
         return
+    groups = None
     for upd in res.get("result", []):
         offset = max(offset, upd["update_id"] + 1)
-        msg = upd.get("message") or {}
-        text = (msg.get("text") or "").strip().lower()
+        msg = upd.get("message") or upd.get("edited_message") or {}
         chat_id = (msg.get("chat") or {}).get("id")
-        if chat_id != cfg["chat_id"]:
+        text = msg.get("text") or ""
+        if not chat_id or not text.startswith("/"):
             continue
-        if text in ("/start", "/help", "start", "help"):
-            send_text(cfg, HELP_TEXT % (cfg["group"], cfg["interval_minutes"]))
-        elif text == "/now":
+        if groups is None:
             try:
-                state_copy = dict(state)
-                state_copy["first_run"] = True
-                check_once(cfg, state_copy)
-            except Exception:
-                log("ошибка /now:\n%s" % traceback.format_exc())
-        elif text == "/week":
-            try:
-                needle = ((cfg.get("weekly") or {}).get("title_contains") or "").lower()
-                cands = [
-                    (u, t) for u, t in fetch_links(cfg)
-                    if needle and needle in t.lower() and "1 неделя" in t.lower()
-                ]
-                if cands:
-                    process_weekly(cfg, cands[0][0], cands[0][1], state)
-                else:
-                    send_text(cfg, "Не нашёл недельное расписание на сайте.")
-            except Exception:
-                log("ошибка /week:\n%s" % traceback.format_exc())
+                groups = get_groups(cfg, fetch_links(cfg))
+            except Exception as e:
+                log("ошибка списка групп: %s" % e)
+                groups = []
+        try:
+            handled = apply_command(cfg, subs, chat_id, text, groups)
+            if handled:
+                save_subs(subs)
+        except Exception:
+            log("ошибка команды:\n%s" % traceback.format_exc())
     state["updates_offset"] = offset
+
+
+def migrate_state(state, cfg):
+    """Старый формат sent: {url: время} → {url|chat: время}."""
+    sent = state.get("sent", {})
+    if any("|" not in k for k in sent):
+        migrated = {}
+        for k, v in sent.items():
+            if "|" in k:
+                migrated[k] = v
+            else:
+                migrated["%s|%s" % (k, cfg.get("chat_id"))] = v
+        state["sent"] = migrated
+    return state
+
+
+def check_once(cfg, state, subs):
+    links = fetch_links(cfg)
+    log("ссылок: %d | подписок: %d" % (len(links), len(subs["subs"])))
+
+    first_run = bool(state.get("first_run"))
+    pending = []
+    for url, title in links:
+        kind, date = classify(title)
+        if kind != "changes":
+            continue
+        head = http_head(url)
+        etag, lm = head.get("etag", ""), head.get("last-modified", "")
+        prev = state["files"].get(url)
+        changed = prev is None or prev.get("etag") != etag or prev.get("last_modified") != lm
+        state["files"][url] = {"title": title, "date": date, "etag": etag, "last_modified": lm}
+        if changed:
+            pending.append((url, title, date))
+
+    pending.sort(key=lambda x: time.strptime(x[2], "%d.%m.%Y"), reverse=True)
+    if first_run:
+        pending = pending[:1]
+        state["first_run"] = False
+    if not pending:
+        save_json(STATE_PATH, state)
+        return
+
+    active = [s for s in subs["subs"] if s.get("active")]
+    for url, title, date in pending:
+        try:
+            data = http_get(url)
+        except Exception as e:
+            log("не скачал %s: %s" % (url, e))
+            continue
+        cache = {}
+        for s in active:
+            group = s["group"]
+            key = norm(group)
+            if key not in cache:
+                cache[key] = parse_changes(data, group)
+            rows = cache[key]
+            if not rows:
+                log("для группы %s в %s нет занятий — пропускаю" % (group, title))
+                continue
+            chat = int(s["chat_id"])
+            sent_key = "%s|%s" % (url, chat)
+            if sent_key in state["sent"]:
+                continue
+            if send_text(cfg, chat, build_changes_message(group, date, rows)):
+                state["sent"][sent_key] = time.strftime("%Y-%m-%d %H:%M:%S")
+                log("отправлено %s -> %s" % (date, chat))
+
+    save_json(STATE_PATH, state)
 
 
 def main():
     cfg = load_config()
-    state = load_state()
+    state = migrate_state(load_state(), cfg)
+    subs = load_subs(cfg)
+    if not os.path.exists(SUBS_PATH):
+        save_subs(subs)  # создаём файл подписок, чтобы он попал в репозиторий
     once = "--once" in sys.argv
-    log("=== бот запущен, группа: %s ===" % cfg["group"])
-
-    if state.get("first_run"):
-        send_text(cfg, "Бот запущен. Группа: <b>%s</b>.\nБуду присылать изменения, как только они появятся." % cfg["group"])
+    log("=== бот v2 запущен, подписок: %d ===" % len(subs["subs"]))
 
     while True:
         try:
-            check_once(cfg, state)
-            handle_commands(cfg, state)
+            handle_commands(cfg, state, subs)
+            check_once(cfg, state, subs)
         except Exception:
             log("ОШИБКА в цикле:\n%s" % traceback.format_exc())
         if once:
             return
-        time.sleep(max(1, int(cfg.get("interval_minutes", 10))) * 60)
+        time.sleep(600)
 
 
 if __name__ == "__main__":
