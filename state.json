@@ -79,6 +79,14 @@
       "etag": "\"6af69b53-1f9bc\"",
       "last_modified": "Fri, 13 Nov 2026 05:08:35 GMT",
       "content_length": "129468"
+    },
+    "https://www.fa.ru/upload/constructor/fa8/mwlh7rfz4xfa16j9dkbxy1jm0s41ff39/16.11.2026.pdf": {
+      "title": "16.11.2026",
+      "kind": "changes",
+      "date": "16.11.2026",
+      "etag": "\"6af6ba73-1f9b7\"",
+      "last_modified": "Fri, 13 Nov 2026 07:21:23 GMT",
+      "content_length": "129463"
     }
   },
   "first_run": false,
