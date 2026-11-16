@@ -87,12 +87,20 @@
       "date": "16.11.2026",
       "etag": "\"6afa646a-1f930\"",
       "last_modified": "Mon, 16 Nov 2026 02:03:22 GMT"
+    },
+    "https://www.fa.ru/upload/constructor/019/odq9jl1f5h1r4yq0r848out3dj3it4c8/17.11.2026.pdf": {
+      "title": "17.11.2026",
+      "date": "17.11.2026",
+      "etag": "\"6afa9d09-1fbb1\"",
+      "last_modified": "Mon, 16 Nov 2026 06:04:57 GMT"
     }
   },
   "first_run": false,
   "updates_offset": 336119855,
   "sent": {
     "https://www.fa.ru/upload/constructor/25c/1pgi7wil9pzl0d42f2zi2ec8xiie85i1/13.11.2026.pdf|1869030255": "2026-11-12 20:46:02",
-    "https://www.fa.ru/upload/constructor/c16/17f6bktl4rjjis1azs7xcee4peltxutf/14.11.2026.pdf|1869030255": "2026-11-13 02:18:49"
+    "https://www.fa.ru/upload/constructor/c16/17f6bktl4rjjis1azs7xcee4peltxutf/14.11.2026.pdf|1869030255": "2026-11-13 02:18:49",
+    "https://www.fa.ru/upload/constructor/019/odq9jl1f5h1r4yq0r848out3dj3it4c8/17.11.2026.pdf|1869030255": "2026-11-16 06:17:19",
+    "https://www.fa.ru/upload/constructor/019/odq9jl1f5h1r4yq0r848out3dj3it4c8/17.11.2026.pdf|5991174919": "2026-11-16 06:17:19"
   }
 }
