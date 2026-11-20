@@ -123,6 +123,18 @@
       "date": "21.11.2026",
       "etag": "\"6aff9803-1336f\"",
       "last_modified": "Fri, 20 Nov 2026 00:44:51 GMT"
+    },
+    "https://www.fa.ru/upload/constructor/c6c/1lo1xs11e9dtf08bwj1lnwfzkvkiyov6/21.11.2026.pdf": {
+      "title": "21.11.2026",
+      "date": "21.11.2026",
+      "etag": "\"6affaae6-1337c\"",
+      "last_modified": "Fri, 20 Nov 2026 02:05:26 GMT"
+    },
+    "https://www.fa.ru/upload/constructor/1ec/qxsuutx23nrpaggphfv51u7eeqsayboe/23.11.2026.pdf": {
+      "title": "23.11.2026",
+      "date": "23.11.2026",
+      "etag": "\"6affa3fe-1f668\"",
+      "last_modified": "Fri, 20 Nov 2026 01:35:58 GMT"
     }
   },
   "first_run": false,
