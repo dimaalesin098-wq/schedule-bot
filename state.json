@@ -141,6 +141,12 @@
       "date": "23.11.2026",
       "etag": "\"6affd5c9-1f6ba\"",
       "last_modified": "Fri, 20 Nov 2026 05:08:25 GMT"
+    },
+    "https://www.fa.ru/upload/constructor/b64/vdl2qtzv5xlgln9ffg7pzfc8ibn9szro/24.11.2026.pdf": {
+      "title": "24.11.2026",
+      "date": "24.11.2026",
+      "etag": "\"6b03d02b-1f527\"",
+      "last_modified": "Mon, 23 Nov 2026 05:33:31 GMT"
     }
   },
   "first_run": false,
@@ -156,6 +162,9 @@
     "https://www.fa.ru/upload/constructor/f00/8bsqnbmhzsphqhlfjdi4zyh2t5qttift/19.11.2026.pdf|5991174919": "2026-11-18 05:29:40",
     "https://www.fa.ru/upload/constructor/e77/n2cjhs9wos0169de2ytzojfzl9jzafg2/20.11.2026.pdf|1869030255": "2026-11-19 01:47:09",
     "https://www.fa.ru/upload/constructor/e77/n2cjhs9wos0169de2ytzojfzl9jzafg2/20.11.2026.pdf|5991174919": "2026-11-19 01:47:10",
-    "https://www.fa.ru/upload/constructor/e77/n2cjhs9wos0169de2ytzojfzl9jzafg2/20.11.2026.pdf|8688627722": "2026-11-19 01:47:10"
+    "https://www.fa.ru/upload/constructor/e77/n2cjhs9wos0169de2ytzojfzl9jzafg2/20.11.2026.pdf|8688627722": "2026-11-19 01:47:10",
+    "https://www.fa.ru/upload/constructor/b64/vdl2qtzv5xlgln9ffg7pzfc8ibn9szro/24.11.2026.pdf|1869030255": "2026-11-23 05:43:07",
+    "https://www.fa.ru/upload/constructor/b64/vdl2qtzv5xlgln9ffg7pzfc8ibn9szro/24.11.2026.pdf|5991174919": "2026-11-23 05:43:07",
+    "https://www.fa.ru/upload/constructor/b64/vdl2qtzv5xlgln9ffg7pzfc8ibn9szro/24.11.2026.pdf|8688627722": "2026-11-23 05:43:08"
   }
 }
